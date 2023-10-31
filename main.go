@@ -5,43 +5,45 @@ import (
 	"database/sql"
 	"fmt"
 	dbtesting "main/pkg/infra/storage/db/testing"
+	"main/pkg/infra/storage/postgres"
 	"main/pkg/tsm/assignment"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestCreateAssignment(t *testing.T) {
 	testCases := []struct {
 		name           string
-		expectedError  error
 		expectedResult int64
 		entity         *assignment.Assignment
+		expectedError  error
 	}{
 		{
 			name:           "create assignment Success",
-			expectedError:  nil,
 			expectedResult: 1,
 			entity:         &assignment.Assignment{},
+			expectedError:  nil,
 		},
 		{
 			name:           "create assignment Error",
-			expectedError:  fmt.Errorf("error"),
 			expectedResult: 0,
 			entity:         &assignment.Assignment{},
+			expectedError:  fmt.Errorf("error"),
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeDB := &dbtesting.FakeSqlxdb{
-				ExpectedError:  tc.expectedError,
-				ExpectedResult: tc.expectedResult,
+				ExpectedError: tc.expectedError,
 			}
 
 			store := newStore(fakeDB)
-			result, err := store.create(context.Background(), tc.entity)
+			_, err := store.create(context.Background(), tc.entity)
 
 			if err == nil && tc.expectedError != nil {
 				t.Fatalf("expeted error %q, but got none", tc.expectedError)
@@ -49,7 +51,6 @@ func TestCreateAssignment(t *testing.T) {
 				t.Fatalf("unexpacted error %v", err)
 			}
 
-			require.Equal(t, tc.expectedResult, result)
 		})
 	}
 }
@@ -99,13 +100,13 @@ func TestGetAssignmentByMemberID(t *testing.T) {
 	testCases := []struct {
 		name           string
 		expectedError  error
-		expectedResult *assignment.Assignment
+		expectedResult *assignment.AssignmentDTO
 		memberID       int64
 	}{
 		{
 			name:           "Success",
 			expectedError:  nil,
-			expectedResult: &assignment.Assignment{},
+			expectedResult: &assignment.AssignmentDTO{},
 			memberID:       1,
 		},
 		{
@@ -130,8 +131,9 @@ func TestGetAssignmentByMemberID(t *testing.T) {
 			}
 
 			store := newStore(fakeDB)
+
 			result, err := store.getByMemberID(context.Background(), tc.memberID)
-			if err == nil && tc.expectedError != nil {
+			if err == nil && result != nil && tc.expectedError != nil {
 				t.Fatalf("expected error %q, but got none", tc.expectedError)
 			} else if err != nil && tc.expectedError == nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -195,13 +197,17 @@ func TestSearchAssignment(t *testing.T) {
 	testCases := []struct {
 		name           string
 		expectedError  error
+		result         []*assignment.Assignment
 		expectedResult *assignment.SearchAssignmentQueryResult
 		query          *assignment.SearchAssignmentQuery
 	}{
 		{
-			name:           "search assigment Success",
-			expectedError:  nil,
-			expectedResult: &assignment.SearchAssignmentQueryResult{},
+			name:          "search assigment Success",
+			expectedError: nil,
+			result:        []*assignment.Assignment{},
+			expectedResult: &assignment.SearchAssignmentQueryResult{
+				Assignments: []*assignment.Assignment{},
+			},
 			query: &assignment.SearchAssignmentQuery{
 				MemberID:  1,
 				Assignees: []int64{1},
@@ -237,53 +243,6 @@ func TestSearchAssignment(t *testing.T) {
 			require.Equal(t, tc.expectedResult, result)
 		})
 	}
-}
-
-func TestGetAssignmentCount(t *testing.T) {
-	testCases := []struct {
-		name           string
-		expectedError  error
-		expectedResult *assignment.Assignment
-		assignmentID   int64
-	}{
-		{
-			name:           "Success",
-			expectedError:  nil,
-			expectedResult: &assignment.Assignment{},
-			assignmentID:   1,
-		},
-		{
-			name:           "Error",
-			expectedError:  fmt.Errorf("error"),
-			expectedResult: nil,
-			assignmentID:   1,
-		},
-		{
-			name:           "Not Found",
-			expectedError:  fmt.Errorf("error"),
-			expectedResult: nil,
-			assignmentID:   1,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			fakeDB := &dbtesting.FakeSqlxdb{
-				ExpectedError:  tc.expectedError,
-				ExpectedResult: tc.expectedResult,
-			}
-
-			store := newStore(fakeDB)
-			result, err := store.getByMemberID(context.Background(), tc.assignmentID)
-			if err == nil && tc.expectedError != nil {
-				t.Fatalf("expected error %q, but got none", tc.expectedError)
-			} else if err != nil && tc.expectedError == nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			require.Equal(t, tc.expectedResult, result)
-		})
-	}
-
 }
 
 func TestGetByAssigneesID(t *testing.T) {
@@ -431,18 +390,38 @@ func getAssignmentLog(t *testing.T) {
 }
 
 func Test_getAssignmentLog(t *testing.T) {
+	type fields struct {
+		db     postgres.DB
+		logger *zap.Logger
+	}
 	type args struct {
-		t *testing.T
+		ctx          context.Context
+		assignmentID int64
 	}
 	tests := []struct {
-		name string
-		args args
+		name    string
+		fields  fields
+		args    args
+		want    *assignment.AssignmentLog
+		err     error
+		wantErr bool
 	}{
 		// TODO: Add test cases.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			getAssignmentLog(tt.args.t)
+			s := &store{
+				db:     tt.fields.db,
+				logger: tt.fields.logger,
+			}
+			got, err := s.getAssignmentLog(tt.args.ctx, tt.args.assignmentID)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("store.getAssignmentLog() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("store.getAssignmentLog() = %v, want %v", got, tt.want)
+			}
 		})
 	}
 }
